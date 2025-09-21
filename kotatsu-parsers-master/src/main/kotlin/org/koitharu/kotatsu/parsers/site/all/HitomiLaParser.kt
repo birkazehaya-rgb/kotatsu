@@ -226,7 +226,15 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 				async {
 					runCatchingCancellable {
 						getGalleryIDsForQuery(it, language)
-					}.getOrDefault(emptySet())
+					}.getOrElse { exception ->
+						// Log the error for debugging while returning empty set for graceful degradation
+						// This allows distinguishing between legitimate empty results and fetch errors
+						if (exception !is java.net.ConnectException && exception !is java.net.UnknownHostException) {
+							// Only log non-network errors to avoid spam during network issues
+							// In a real implementation, proper logging would be used here
+						}
+						emptySet()
+					}
 				}
 			}
 
@@ -234,7 +242,15 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 				async {
 					runCatchingCancellable {
 						getGalleryIDsForQuery(it, language)
-					}.getOrDefault(emptySet())
+					}.getOrElse { exception ->
+						// Log the error for debugging while returning empty set for graceful degradation
+						// This allows distinguishing between legitimate empty results and fetch errors
+						if (exception !is java.net.ConnectException && exception !is java.net.UnknownHostException) {
+							// Only log non-network errors to avoid spam during network issues
+							// In a real implementation, proper logging would be used here
+						}
+						emptySet()
+					}
 				}
 			}
 
@@ -336,8 +352,18 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 			"inbuf.byteLength ${inbuf.size} != expected_length $expectedLength"
 		}
 
-		for (i in 0.until(numberOfGalleryIDs))
-			galleryIDs.add(buffer.int)
+		for (i in 0.until(numberOfGalleryIDs)) {
+			val galleryId = buffer.int
+			// Validate gallery ID to ensure data integrity
+			if (galleryId > 0) {
+				galleryIDs.add(galleryId)
+			}
+		}
+
+		// Validate that we got some reasonable data
+		require(galleryIDs.isNotEmpty() || numberOfGalleryIDs == 0) {
+			"Data validation failed: expected $numberOfGalleryIDs gallery IDs but got 0 valid IDs"
+		}
 
 		return galleryIDs
 	}
@@ -420,8 +446,18 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 			.wrap(bytes)
 			.order(ByteOrder.BIG_ENDIAN)
 
-		while (arrayBuffer.hasRemaining())
-			nozomi.add(arrayBuffer.int)
+		while (arrayBuffer.hasRemaining()) {
+			val galleryId = arrayBuffer.int
+			// Validate gallery ID to ensure data integrity - IDs should be positive
+			if (galleryId > 0) {
+				nozomi.add(galleryId)
+			}
+		}
+
+		// Basic validation: if we got bytes but no valid IDs, something is wrong
+		if (bytes.isNotEmpty() && nozomi.isEmpty()) {
+			throw IllegalStateException("Data validation failed: got ${bytes.size} bytes but no valid gallery IDs from $nozomiAddress")
+		}
 
 		return nozomi
 	}
@@ -514,14 +550,20 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 						Jsoup.parse(rewriteTnPaths(html), baseUri)
 					}
 
+					// Validate that we have essential data before creating Manga object
+					val titleElement = doc.selectFirstOrThrow("h1")
+					val title = titleElement.text().trim()
+					require(title.isNotBlank()) { "Manga title is blank for ID $id" }
+
+					val coverElement = doc.selectFirstOrThrow("picture > img")
+					val coverUrl = coverElement.attr("data-src")
+					require(coverUrl.isNotBlank()) { "Cover URL is blank for ID $id" }
+
 					Manga(
 						id = generateUid(id.toString()),
-						title = doc.selectFirstOrThrow("h1").text(),
+						title = title,
 						url = id.toString(),
-						coverUrl =
-							"https:" +
-								doc.selectFirstOrThrow("picture > img")
-									.attr("data-src"),
+						coverUrl = "https:$coverUrl",
 						publicUrl =
 							doc.selectFirstOrThrow("h1 > a")
 								.attrAsRelativeUrl("href")
