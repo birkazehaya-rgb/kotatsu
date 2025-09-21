@@ -334,8 +334,6 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 
 		val inbuf = getRangedResponse(url, offset.until(offset + length))
 
-		val galleryIDs = mutableSetOf<Int>()
-
 		val buffer =
 			ByteBuffer
 				.wrap(inbuf)
@@ -352,18 +350,13 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 			"inbuf.byteLength ${inbuf.size} != expected_length $expectedLength"
 		}
 
+		val rawGalleryIDs = mutableListOf<Int>()
 		for (i in 0.until(numberOfGalleryIDs)) {
-			val galleryId = buffer.int
-			// Validate gallery ID to ensure data integrity
-			if (galleryId > 0) {
-				galleryIDs.add(galleryId)
-			}
+			rawGalleryIDs.add(buffer.int)
 		}
 
-		// Validate that we got some reasonable data
-		require(galleryIDs.isNotEmpty() || numberOfGalleryIDs == 0) {
-			"Data validation failed: expected $numberOfGalleryIDs gallery IDs but got 0 valid IDs"
-		}
+		// Validate and filter gallery IDs using utility function
+		val galleryIDs = validatePositiveIds(rawGalleryIDs, url)
 
 		return galleryIDs
 	}
@@ -440,24 +433,18 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 		}
 
 		val bytes = getRangedResponse(nozomiAddress, range)
-		val nozomi = mutableSetOf<Int>()
 
 		val arrayBuffer = ByteBuffer
 			.wrap(bytes)
 			.order(ByteOrder.BIG_ENDIAN)
 
+		val rawIds = mutableListOf<Int>()
 		while (arrayBuffer.hasRemaining()) {
-			val galleryId = arrayBuffer.int
-			// Validate gallery ID to ensure data integrity - IDs should be positive
-			if (galleryId > 0) {
-				nozomi.add(galleryId)
-			}
+			rawIds.add(arrayBuffer.int)
 		}
 
-		// Basic validation: if we got bytes but no valid IDs, something is wrong
-		if (bytes.isNotEmpty() && nozomi.isEmpty()) {
-			throw IllegalStateException("Data validation failed: got ${bytes.size} bytes but no valid gallery IDs from $nozomiAddress")
-		}
+		// Validate and filter IDs using utility function  
+		val nozomi = validatePositiveIds(rawIds, nozomiAddress)
 
 		return nozomi
 	}
@@ -552,12 +539,10 @@ internal class HitomiLaParser(context: MangaLoaderContext) : AbstractMangaParser
 
 					// Validate that we have essential data before creating Manga object
 					val titleElement = doc.selectFirstOrThrow("h1")
-					val title = titleElement.text().trim()
-					require(title.isNotBlank()) { "Manga title is blank for ID $id" }
+					val title = validateMangaTitle(titleElement.text(), "ID $id")
 
 					val coverElement = doc.selectFirstOrThrow("picture > img")
-					val coverUrl = coverElement.attr("data-src")
-					require(coverUrl.isNotBlank()) { "Cover URL is blank for ID $id" }
+					val coverUrl = validateUrl(coverElement.attr("data-src"), "Cover URL", "ID $id")
 
 					Manga(
 						id = generateUid(id.toString()),
